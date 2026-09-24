@@ -126,6 +126,23 @@ docker compose down -v                    # stop and DELETE all data
 Don't run `bench build`, `bench get-app` or `pip install` in the containers:
 the code and assets come from the image (see [Custom apps](#custom-apps)).
 
+Point of sale
+-------------
+
+The point of sale is part of ERPNext (Selling > Point of Sale,
+`/app/point-of-sale`), but it needs a POS Profile before it can be used:
+
+1. Give the payment methods an account: Accounting > Mode of Payment >
+   `Cash` > Accounts: the company and its cash account (e.g. `Efectivo - MC`).
+   Without it, sales fail with "Account is required". Same for any other
+   method used (e.g. `Credit Card` with a bank account).
+2. Create a POS Profile (Selling > POS Profile): company, warehouse, currency
+   (CLP), price list (`Standard Selling`), write-off account and cost center,
+   and the payment methods (one of them default).
+3. Open Point of Sale: it asks for an opening entry (cash on hand) for the
+   profile, then sells. In ERPNext 16 each sale is a Sales Invoice (POS
+   settings' "Sales Invoice mode"); close the day with a POS Closing Entry.
+
 Backups
 -------
 
