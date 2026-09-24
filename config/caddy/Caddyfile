@@ -1,0 +1,53 @@
+# Caddy in front of ERPNext: TLS, the public site address and security headers.
+# Everything goes to the image's own nginx (`frontend`), which serves the
+# assets built into the image and routes to Gunicorn (`backend`) and Socket.IO
+# (`websocket`).
+{
+	# No admin API: config is static, reloads happen by restarting the container.
+	admin off
+
+	servers {
+		# Behind a reverse proxy on a private network, log the real client IP
+		# and pass it on (X-Forwarded-For).
+		trusted_proxies static private_ranges
+		# Client IP = the right-most untrusted address (can't be spoofed).
+		trusted_proxies_strict
+	}
+}
+
+(erpnext) {
+	encode zstd gzip
+
+	request_body {
+		max_size {$UPLOAD_MAX_SIZE}
+	}
+
+	# nginx sets its own security headers; add the ones it doesn't send. One
+	# directive per header: in a single `header { }` block, Caddy applies the
+	# "?" (set if missing) fields together, only when all are missing.
+	header ?X-Content-Type-Options nosniff
+	header ?X-Frame-Options SAMEORIGIN
+	header ?Referrer-Policy strict-origin-when-cross-origin
+	header -Server
+
+	# nginx takes the last X-Forwarded-For address as the client: send only the
+	# real client IP, not the chain of proxies (e.g. Traefik).
+	reverse_proxy frontend:8080 {
+		header_up X-Forwarded-For {client_ip}
+	}
+}
+
+# Public site. SITE_ADDRESS is ":80" for plain HTTP (local, or behind another
+# proxy) or a domain name, which makes Caddy obtain and renew a certificate
+# automatically ("localhost" uses Caddy's internal CA).
+{$SITE_ADDRESS} {
+	import erpnext
+	log {
+		output stdout
+	}
+}
+
+# Internal-only site (port not published) for the container healthcheck.
+:8080 {
+	import erpnext
+}

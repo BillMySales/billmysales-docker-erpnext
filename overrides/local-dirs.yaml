@@ -1,0 +1,61 @@
+# Keep the stack's data in local directories instead of named volumes, so it
+# is visible from the host (and easy to include in host-level backups).
+#
+# In .env:
+#   COMPOSE_FILE=compose.yaml:overrides/local-dirs.yaml
+#   DATA_DIR=./data        # optional, default ./data (relative to compose.yaml)
+#
+# Only the directories you keep here change; delete the lines you don't need
+# (e.g. keep just `sites` and `backups`). Existing data in the named volumes is
+# NOT moved: switch before the first `up`, or restore a backup afterwards.
+# On Linux, the ERPNext containers run as UID 1000 (frappe): create their
+# directories first: mkdir -p data/sites data/logs && sudo chown -R 1000:1000 data/sites data/logs
+# On macOS any directory works (Docker Desktop maps owners), except the
+# database: macOS file systems are case-insensitive and Frappe's table names
+# are mixed-case (`tabDocField`), which breaks MariaDB there. Delete the `db`
+# lines below on macOS (the database then stays in the `db_data` volume).
+# Backup files are root-owned with mode 0600.
+
+x-erpnext-dirs: &erpnext-dirs
+  - ${DATA_DIR:-./data}/sites:/home/frappe/frappe-bench/sites
+  - ${DATA_DIR:-./data}/logs:/home/frappe/frappe-bench/logs
+
+x-erpnext-dirs-scripts: &erpnext-dirs-scripts
+  - ${DATA_DIR:-./data}/sites:/home/frappe/frappe-bench/sites
+  - ${DATA_DIR:-./data}/logs:/home/frappe/frappe-bench/logs
+  - ./scripts:/usr/local/share/stack/scripts:ro
+
+services:
+  db:
+    volumes:
+      - ${DATA_DIR:-./data}/db:/var/lib/mysql
+  redis-queue:
+    volumes:
+      - ${DATA_DIR:-./data}/redis-queue:/data
+  setup:
+    volumes: *erpnext-dirs-scripts
+  backend:
+    volumes: *erpnext-dirs
+  websocket:
+    volumes: *erpnext-dirs
+  frontend:
+    volumes: *erpnext-dirs
+  queue-short:
+    volumes: *erpnext-dirs
+  queue-long:
+    volumes: *erpnext-dirs
+  scheduler:
+    volumes: *erpnext-dirs
+  bench:
+    volumes: *erpnext-dirs
+  caddy:
+    volumes:
+      - ./config/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${DATA_DIR:-./data}/caddy/data:/data
+      - ${DATA_DIR:-./data}/caddy/config:/config
+  backup:
+    volumes:
+      - ${DATA_DIR:-./data}/sites:/home/frappe/frappe-bench/sites
+      - ${DATA_DIR:-./data}/logs:/home/frappe/frappe-bench/logs
+      - ${DATA_DIR:-./data}/backups:/backups
+      - ./scripts:/usr/local/share/stack/scripts:ro

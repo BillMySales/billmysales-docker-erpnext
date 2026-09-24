@@ -1,0 +1,34 @@
+# Publish the site through an existing Traefik instead of host ports.
+#
+# Traefik terminates TLS and forwards plain HTTP to Caddy on a shared external
+# Docker network. Required in .env:
+#   COMPOSE_FILE=compose.yaml:overrides/traefik.yaml
+#   TRAEFIK_HOST=erp.example.com
+#   ERPNEXT_URL=https://erp.example.com
+#   SITE_ADDRESS=:80
+# Optional (defaults below): TRAEFIK_NETWORK, TRAEFIK_ENTRYPOINT,
+# TRAEFIK_CERTRESOLVER.
+#
+# Only Caddy joins the Traefik network; the database and ERPNext stay internal.
+# Needs Docker Compose 2.24+ (`!reset`).
+
+services:
+  caddy:
+    # No host ports: Traefik is the only entry point.
+    ports: !reset []
+    networks:
+      - default
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-shared_network}"
+      - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-erpnext}.rule=Host(`${TRAEFIK_HOST:?Set TRAEFIK_HOST in .env}`)"
+      - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-erpnext}.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-erpnext}.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-erpnext}.service=${COMPOSE_PROJECT_NAME:-erpnext}"
+      - "traefik.http.services.${COMPOSE_PROJECT_NAME:-erpnext}.loadbalancer.server.port=80"
+
+networks:
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK:-shared_network}

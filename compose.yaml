@@ -1,0 +1,366 @@
+# ERPNext stack: Caddy (TLS) + ERPNext (official Frappe image: nginx, Gunicorn,
+# Socket.IO, workers, scheduler) + MariaDB + Redis, with a setup job and
+# optional backups and Mailpit.
+#
+# Quick start (development):
+#   cp .env.dev.example .env
+#   docker compose up -d
+#   docker compose logs -f setup   # wait for "==> Done"
+#
+# Production: start from .env.prod.example instead. See README.md.
+#
+# Required variables have no default: compose refuses to start without them.
+
+name: ${COMPOSE_PROJECT_NAME:-erpnext}
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: ${LOG_MAX_SIZE:-10m}
+    max-file: "${LOG_MAX_FILE:-3}"
+
+# Every ERPNext container: same image, the `sites` volume (site config and
+# files; the assets come from the image) and the `logs` volume.
+x-erpnext: &erpnext
+  image: ${ERPNEXT_IMAGE:-frappe/erpnext}:${ERPNEXT_VERSION:-v16.36.0}
+  restart: unless-stopped
+  logging: *logging
+  volumes:
+    - sites:/home/frappe/frappe-bench/sites
+    - logs:/home/frappe/frappe-bench/logs
+
+# Long-running ERPNext services start once `setup` has finished.
+x-after-setup: &after-setup
+  depends_on:
+    setup:
+      condition: service_completed_successfully
+
+# Containers that render pages to PDF (wkhtmltopdf loads the page's CSS and
+# images through ERPNEXT_URL): resolve its host to the Docker host, where
+# Caddy (or Traefik) publishes the site. Works on localhost-style dev URLs and
+# on servers that can't reach their own public address (no hairpin NAT).
+# Also lets ERPNext reach services on the host at host.docker.internal.
+x-app-hosts: &app-hosts
+  extra_hosts:
+    - "${ERPNEXT_HOST:?Set ERPNEXT_HOST in .env (the host name of ERPNEXT_URL)}:host-gateway"
+    - "host.docker.internal:host-gateway"
+
+x-redis-env: &redis-env
+  FRAPPE_REDIS_CACHE: redis://redis-cache:6379
+  FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
+
+services:
+  db:
+    image: mariadb:${MARIADB_VERSION:-11.8}
+    restart: unless-stopped
+    logging: *logging
+    # Frappe needs utf8mb4 with this collation.
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD in .env}
+      MARIADB_AUTO_UPGRADE: 1
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: ${DB_MEMORY_LIMIT:-1g}
+
+  # Cache (no persistence) and queue/Socket.IO (persisted: pending jobs).
+  redis-cache:
+    image: redis:${REDIS_VERSION:-8.6}-alpine
+    restart: unless-stopped
+    logging: *logging
+    command: ["redis-server", "--save", "", "--appendonly", "no",
+              "--maxmemory", "${REDIS_CACHE_MAXMEMORY:-192mb}", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_CACHE_MEMORY_LIMIT:-256m}
+
+  redis-queue:
+    image: redis:${REDIS_VERSION:-8.6}-alpine
+    restart: unless-stopped
+    logging: *logging
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_queue_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_QUEUE_MEMORY_LIMIT:-256m}
+
+  # One-shot job: bench config, creates or migrates the site, setup wizard
+  # and the environment (URL, mail). Safe to repeat; runs on every `up`.
+  setup:
+    <<: *erpnext
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      redis-queue:
+        condition: service_healthy
+    environment:
+      ERPNEXT_VERSION: ${ERPNEXT_VERSION:-v16.36.0}
+      ERPNEXT_SITE: ${ERPNEXT_SITE:-site}
+      ERPNEXT_URL: ${ERPNEXT_URL:?Set ERPNEXT_URL in .env (e.g. https://erp.example.com)}
+      ERPNEXT_HOST: ${ERPNEXT_HOST:?Set ERPNEXT_HOST in .env (the host name of ERPNEXT_URL)}
+      ERPNEXT_ADMIN_PASSWORD: ${ERPNEXT_ADMIN_PASSWORD:?Set ERPNEXT_ADMIN_PASSWORD in .env}
+      ERPNEXT_ADMIN_EMAIL: ${ERPNEXT_ADMIN_EMAIL:?Set ERPNEXT_ADMIN_EMAIL in .env}
+      ERPNEXT_ADMIN_NAME: ${ERPNEXT_ADMIN_NAME:-Admin}
+      ERPNEXT_COMPANY_NAME: ${ERPNEXT_COMPANY_NAME:-My Company}
+      ERPNEXT_COMPANY_ABBR: ${ERPNEXT_COMPANY_ABBR:-MC}
+      ERPNEXT_COUNTRY: ${ERPNEXT_COUNTRY:-Chile}
+      ERPNEXT_CURRENCY: ${ERPNEXT_CURRENCY:-CLP}
+      ERPNEXT_TIMEZONE: ${ERPNEXT_TIMEZONE:-America/Santiago}
+      ERPNEXT_LANG: ${ERPNEXT_LANG:-es-CL}
+      ERPNEXT_CHART_OF_ACCOUNTS: ${ERPNEXT_CHART_OF_ACCOUNTS:-Standard}
+      ERPNEXT_FISCAL_YEAR_START: ${ERPNEXT_FISCAL_YEAR_START:-01-01}
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD in .env}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-}
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+      - ./scripts:/usr/local/share/stack/scripts:ro
+    # Through the image's entrypoint, which links the image's assets into `sites`.
+    command: ["bash", "/usr/local/share/stack/scripts/setup.sh"]
+    deploy:
+      resources:
+        limits:
+          memory: ${SETUP_MEMORY_LIMIT:-1536m}
+
+  # Gunicorn (Python app server), internal only.
+  backend:
+    <<: [*erpnext, *after-setup, *app-hosts]
+    environment:
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
+      GUNICORN_THREADS: ${GUNICORN_THREADS:-4}
+      GUNICORN_TIMEOUT: ${ERPNEXT_TIMEOUT:-120}
+    healthcheck:
+      # Frappe picks the site from this header (or the Host).
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "-H", "X-Frappe-Site-Name: ${ERPNEXT_SITE:-site}", "http://localhost:8000/api/method/ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: ${BACKEND_MEMORY_LIMIT:-1g}
+
+  # Socket.IO server (real-time updates).
+  websocket:
+    <<: [*erpnext, *after-setup]
+    environment: *redis-env
+    command: ["node", "/home/frappe/frappe-bench/apps/frappe/socketio.js"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:9000/socket.io/?EIO=4&transport=polling"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: ${WEBSOCKET_MEMORY_LIMIT:-256m}
+
+  # The image's nginx: assets and site files, proxy to backend and websocket.
+  # Internal only: Caddy is in front.
+  frontend:
+    <<: *erpnext
+    # nginx resolves backend and websocket once at start: restart it when
+    # compose recreates them (new IP addresses), or it answers 502.
+    depends_on:
+      backend:
+        condition: service_healthy
+        restart: true
+      websocket:
+        condition: service_healthy
+        restart: true
+    command: ["nginx-entrypoint.sh"]
+    environment:
+      BACKEND: backend:8000
+      SOCKETIO: websocket:9000
+      FRAPPE_SITE_NAME_HEADER: ${ERPNEXT_SITE:-site}
+      # Only Caddy reaches nginx; it sends the real client IP.
+      UPSTREAM_REAL_IP_ADDRESS: 0.0.0.0/0
+      UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
+      UPSTREAM_REAL_IP_RECURSIVE: "off"
+      PROXY_READ_TIMEOUT: ${ERPNEXT_TIMEOUT:-120}
+      CLIENT_MAX_BODY_SIZE: ${UPLOAD_MAX_SIZE:-50M}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8080/api/method/ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: ${FRONTEND_MEMORY_LIMIT:-128m}
+
+  # Background job workers (short: interactive jobs; long: reports, imports)
+  # and the scheduler (scheduled jobs, e.g. emails, recurring documents).
+  queue-short:
+    <<: [*erpnext, *after-setup, *app-hosts]
+    environment: *redis-env
+    command: ["bench", "worker", "--queue", "short,default"]
+    healthcheck: &process-health
+      test: ["CMD-SHELL", "grep -q bench /proc/1/cmdline"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${WORKER_MEMORY_LIMIT:-768m}
+
+  queue-long:
+    <<: [*erpnext, *after-setup, *app-hosts]
+    environment: *redis-env
+    command: ["bench", "worker", "--queue", "long,default,short"]
+    healthcheck: *process-health
+    deploy:
+      resources:
+        limits:
+          memory: ${WORKER_MEMORY_LIMIT:-768m}
+
+  scheduler:
+    <<: [*erpnext, *after-setup, *app-hosts]
+    command: ["bench", "schedule"]
+    healthcheck: *process-health
+    deploy:
+      resources:
+        limits:
+          memory: ${SCHEDULER_MEMORY_LIMIT:-512m}
+
+  caddy:
+    image: caddy:${CADDY_VERSION:-2.11}-alpine
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      frontend:
+        condition: service_healthy
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+      UPLOAD_MAX_SIZE: ${UPLOAD_MAX_SIZE:-50M}
+    ports:
+      - "${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-80}:80"
+      - "${HTTP_BIND:-127.0.0.1}:${HTTPS_PORT:-443}:443"
+      - "${HTTP_BIND:-127.0.0.1}:${HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - ./config/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # TLS certificates and keys (keep them: ACME rate limits).
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8080/api/method/ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: ${CADDY_MEMORY_LIMIT:-256m}
+
+  # Optional (profile "backup"): site backup (database, files, config) every
+  # BACKUP_INTERVAL_HOURS, kept BACKUP_KEEP_DAYS days in the `backups` volume
+  # (overrides/local-dirs.yaml puts them in a local directory instead).
+  backup:
+    <<: [*erpnext, *after-setup]
+    profiles: ["backup"]
+    # root only to own /backups; bench itself runs as `frappe`.
+    user: root
+    environment:
+      ERPNEXT_SITE: ${ERPNEXT_SITE:-site}
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD in .env}
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-7}
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+      - backups:/backups
+      - ./scripts:/usr/local/share/stack/scripts:ro
+    entrypoint: ["bash", "/usr/local/share/stack/scripts/backup.sh"]
+    command: ["loop"]
+    healthcheck:
+      test: ["CMD", "bash", "/usr/local/share/stack/scripts/backup.sh", "health"]
+      interval: 5m
+      timeout: 10s
+      retries: 3
+      start_period: 10m
+    deploy:
+      resources:
+        limits:
+          memory: ${BACKUP_MEMORY_LIMIT:-768m}
+
+  # Optional (profile "mailpit", development): catches all outgoing mail.
+  # Set SMTP_HOST=mailpit and SMTP_PORT=1025; web UI on MAILPIT_PORT.
+  mailpit:
+    image: axllent/mailpit:${MAILPIT_VERSION:-v1.31}
+    profiles: ["mailpit"]
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    ports:
+      - "${HTTP_BIND:-127.0.0.1}:${MAILPIT_PORT:-8025}:8025"
+
+  # bench commands for the site (profile "tools"), e.g.:
+  #   docker compose run --rm bench console
+  #   docker compose run --rm bench list-apps
+  bench:
+    <<: *erpnext
+    profiles: ["tools"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["/usr/local/bin/entrypoint.sh", "bench", "--site", "${ERPNEXT_SITE:-site}"]
+    command: ["--help"]
+    deploy:
+      resources:
+        limits:
+          memory: ${SETUP_MEMORY_LIMIT:-1536m}
+
+volumes:
+  db_data:
+  redis_queue_data:
+  sites:
+  logs:
+  caddy_data:
+  caddy_config:
+  backups:
