@@ -154,12 +154,17 @@ the site config (with the encryption key of stored passwords). Backups older
 than `BACKUP_KEEP_DAYS` are deleted. Files are readable by their owner only.
 
 ```shell
-docker compose run --rm backup now                  # back up now
-docker compose run --rm backup list                 # list timestamps
+docker compose run --rm --no-deps backup now                  # back up now
+docker compose run --rm --no-deps backup list                 # list timestamps
 docker compose stop backend websocket frontend queue-short queue-long scheduler
-docker compose run --rm backup restore <timestamp>  # database, files, encryption key
+docker compose run --rm --no-deps backup restore <timestamp>  # database, files, encryption key
 docker compose up -d
 ```
+
+`--no-deps` keeps the command from starting `setup` first (with damaged
+data `setup` fails and the restore would never run); the database and
+Redis must be running (`docker compose up -d db redis-cache redis-queue`
+if the stack is down).
 
 A restore replaces the database and the files, puts back the backup's
 encryption key and runs `bench migrate` (the backup may come from an older
