@@ -37,9 +37,11 @@ docker compose up -d
 docker compose logs -f setup   # wait for "==> Done" (about 1.5 minutes)
 ```
 
-- ERPNext: http://erp.localhost:8109 (user `admin@example.com` or
+- ERPNext: http://erp.localhost:8109 (user `manager@example.com` or
   `Administrator`, password `admin12345`). Not `localhost`: see
-  [PDFs](#pdfs-and-the-site-url).
+  [PDFs](#pdfs-and-the-site-url). Not `admin@example.com`: Frappe's
+  install unsubscribes it (and `guest@example.com`) from all emails, as the
+  placeholder addresses of its Administrator and Guest users.
 - Mailpit (every email ERPNext sends): http://localhost:8025
 
 Production
