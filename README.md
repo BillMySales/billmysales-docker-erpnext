@@ -92,6 +92,9 @@ Optional services are enabled with `COMPOSE_PROFILES` in `.env`, e.g.
 Caddy forwards everything to the image's own nginx, as frappe_docker does:
 the assets (JS/CSS) are built into the image and linked into the `sites`
 volume when each container starts, so they always match the running version.
+The nginx also serves private files (`/protected`, through Frappe's
+`X-Accel-Redirect`) and routes Socket.IO to `websocket`, so Caddy doesn't
+talk to Gunicorn directly.
 
 ### What `setup` does
 
@@ -176,11 +179,13 @@ and with a backup taken on an older ERPNext (a v15 backup restores into v16).
 Upgrades
 --------
 
-Back up first, then change `ERPNEXT_VERSION` in `.env` and run
-`docker compose up -d`: `setup` empties the Redis cache and runs
-`bench migrate`, then the app services start on the new image. Minor
-versions take about a minute; v15 → v16 took under two minutes on a small
-site (91 patches). The site is down (`502`) while `setup` migrates.
+Back up first, then change `ERPNEXT_VERSION` in `.env` (not only on the
+`up` command line: `docker compose run bench` would use the default image,
+new code on an old database) and run `docker compose up -d`: `setup`
+empties the Redis cache and runs `bench migrate`, then the app services
+start on the new image. Minor versions take about a minute; v15 → v16 took
+under two minutes on a small site (91 patches). The site is down (`502`)
+while `setup` migrates.
 
 If the migration fails, the app services don't start: fix the cause and run
 `docker compose up -d` again (`bench migrate` resumes), or go back with the
@@ -268,6 +273,11 @@ Notes:
 - ERPNext 16 creates its master data (item groups, units of measure) with
   English names also in `es-CL` (v15 translated them): e.g. `Services`,
   `Nos`.
+- Amounts use each currency's number format
+  (`use_number_format_from_currency`), set by `setup` with
+  `frappe.client.set_value` (it saves System Settings, so the defaults are
+  updated; `set_single_value` doesn't). `currency_precision = 0` has no
+  effect: Frappe treats 0 as unset.
 - Chile has no verified chart of accounts in ERPNext (its template is
   "unverified", not offered by the wizard): the default is `Standard`.
 - `ERPNEXT_SITE` is the internal site name (a directory and a database); the
@@ -323,6 +333,27 @@ What was checked for this stack (2026-09-24):
   database in a volume on macOS, see the override).
 - Not tested: issuing a real Let's Encrypt certificate (needs a public
   domain).
+
+Testing
+-------
+
+API calls without CSRF need an API key. Create one in the console (reads
+stdin) and send it as `Authorization: token <key>:<secret>`:
+
+```shell
+docker compose run --rm -T bench console <<'EOF'
+u = frappe.get_doc("User", "manager@example.com")
+u.api_key = "testkey"
+u.api_secret = "testsecret"
+u.save()
+frappe.db.commit()
+EOF
+curl -s -H 'Authorization: token testkey:testsecret' \
+    http://erp.localhost:8109/api/resource/Customer | tr -d '\000-\037' | jq
+```
+
+`bench execute` commits by itself. API JSON may contain control characters:
+strip them (`tr -d '\000-\037'`) before `jq`.
 
 Resource usage
 --------------
