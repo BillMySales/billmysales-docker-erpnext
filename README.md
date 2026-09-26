@@ -49,9 +49,10 @@ Production
 
 ```shell
 cp .env.prod.example .env
-# Fill in ERPNEXT_URL, ERPNEXT_HOST, SITE_ADDRESS, DB_ROOT_PASSWORD,
-# ERPNEXT_ADMIN_PASSWORD, ERPNEXT_ADMIN_EMAIL, the company values and the
-# SMTP_* values.
+# Required: ERPNEXT_URL, ERPNEXT_HOST, SITE_ADDRESS, DB_ROOT_PASSWORD,
+# ERPNEXT_ADMIN_PASSWORD, ERPNEXT_ADMIN_EMAIL. Recommended: the SMTP_*
+# values. Optional: the company settings (first install only; the defaults
+# give a company in Chile with CLP).
 docker compose up -d
 ```
 
@@ -60,8 +61,8 @@ docker compose up -d
 - Behind another TLS-terminating proxy, use `SITE_ADDRESS=:80`: the scheme
   and the client IP are passed on with `X-Forwarded-*` headers.
 - Compose refuses to start while a required value is missing.
-- Configure SMTP: without it ERPNext can't send any mail (documents, password
-  resets, notifications).
+- Configure SMTP (recommended, not required): without `SMTP_HOST` ERPNext
+  can't send any mail (documents, password resets, notifications).
 - The `backup` profile is enabled by default in the production template.
 - Behind an existing Traefik (no host ports), use `overrides/traefik.yaml`
   (see [Overrides](#overrides)).
@@ -267,9 +268,9 @@ Notes:
 
 - The SMTP settings are the site's default outgoing mail server (Frappe's
   `mail_server` site config), used unless an Email Account in ERPNext is the
-  default outgoing one. It supports STARTTLS (`SMTP_SECURE=tls`, port 587),
-  not SMTPS (port 465); for that, add an Email Account. Mail is sent by the
-  scheduler's email queue, every 4 minutes.
+  default outgoing one. It supports STARTTLS (`SMTP_SECURE=tls`, the
+  default, port 587), not SMTPS (port 465); for that, add an Email Account.
+  Mail is sent by the scheduler's email queue, every 4 minutes.
 - ERPNext 16 creates its master data (item groups, units of measure) with
   English names also in `es-CL` (v15 translated them): e.g. `Services`,
   `Nos`.

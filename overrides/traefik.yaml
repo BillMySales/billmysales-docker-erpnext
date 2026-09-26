@@ -5,6 +5,7 @@
 #   COMPOSE_FILE=compose.yaml:overrides/traefik.yaml
 #   TRAEFIK_HOST=erp.example.com
 #   ERPNEXT_URL=https://erp.example.com
+#   ERPNEXT_HOST=erp.example.com   # the same domain (PDFs load it, see README)
 #   SITE_ADDRESS=:80
 # Optional (defaults below): TRAEFIK_NETWORK, TRAEFIK_ENTRYPOINT,
 # TRAEFIK_CERTRESOLVER.
