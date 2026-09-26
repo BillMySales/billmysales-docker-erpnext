@@ -112,7 +112,7 @@ services:
   # One-shot job: bench config, creates or migrates the site, setup wizard
   # and the environment (URL, mail). Safe to repeat; runs on every `up`.
   setup:
-    <<: *erpnext
+    <<: [*erpnext, *app-hosts]
     restart: "no"
     depends_on:
       db:
@@ -343,7 +343,7 @@ services:
   #   docker compose run --rm bench console
   #   docker compose run --rm bench list-apps
   bench:
-    <<: *erpnext
+    <<: [*erpnext, *app-hosts]
     profiles: ["tools"]
     restart: "no"
     depends_on:

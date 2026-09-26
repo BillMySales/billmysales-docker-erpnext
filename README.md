@@ -287,8 +287,9 @@ Notes:
 - The image's nginx sends `Strict-Transport-Security` with
   `includeSubDomains; preload`: browsers ignore it over plain HTTP, but on
   HTTPS it applies to every subdomain of the site's domain.
-- From inside the containers, the host machine is reachable as
-  `host.docker.internal` (`backend`).
+- From inside the containers that run ERPNext (backend, workers,
+  scheduler, setup, bench), the host machine is reachable as
+  `host.docker.internal`.
 
 Security
 --------
