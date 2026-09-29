@@ -305,7 +305,7 @@ Security
 Validation
 ----------
 
-What was checked for this stack (2026-09-24):
+What was checked for this stack:
 
 - Clean start (`down -v` + `up -d`) in about 85 s: every service `healthy`,
   `setup` `Exited (0)`; a second run makes no changes.
